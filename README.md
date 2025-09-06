@@ -4,6 +4,7 @@
 二、项目文件说明
   Task文件夹中存放与http通信有关的源码实现，包括对http报文的封装以及解析等内容
   Thread文件夹中存放与线程有关的文件，线程池即由里面的thread_pool.h来实现
+  main.cpp为项目入口，实现了Epoll监听文件描述符，套接字通信等功能
 
 三、环境说明
   1.Linux环境：Ubuntu18 镜像文件：ubuntu-18.04.6-desktop-amd64.iso
