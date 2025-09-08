@@ -9,6 +9,7 @@
 #include<fcntl.h>
 #include<sys/epoll.h>
 #include<signal.h>
+#include<iostream>
 
 #include "./Thread/locker.h"
 #include "./Thread/thread_pool.h"
@@ -20,9 +21,13 @@
 //监听的最大的数量
 #define MAX_EVENT_NUM 10000
 
+// 数据库配置
+#define MYSQL_HOST "localhost"
+#define MYSQL_USER "webuser"   
+#define MYSQL_PASSWORD "23456789"
+#define MYSQL_DATABASE "bzk11_db"
 
 //项目的入口  主线程  
-
 
 //添加信号捕捉
 void addSignal(int signal,void(handler)(int)){
@@ -64,6 +69,14 @@ int main(int argc,char *argv[]){
     //而不是直接终止  因此在网络编程中常常将这个信号忽略掉
     addSignal(SIGPIPE,SIG_IGN);
 
+    // 初始化数据库连接
+    std::cout << "正在初始化数据库连接..." << std::endl;
+    if (!HttpConnection::initDatabase(MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE)) {
+        std::cerr << "数据库初始化失败！请检查数据库配置和连接状态。" << std::endl;
+        exit(-1);
+    }
+    std::cout << "数据库连接初始化成功！" << std::endl;
+
     //创建线程池，初始化线程池  HttpConnection即为任务类
     ThreadPool<HttpConnection>*pool=NULL;
     try{
@@ -71,7 +84,8 @@ int main(int argc,char *argv[]){
     }
     catch(...){
         //捕捉到异常说明线程池都没有建好，无法运行，直接退出
-        delete []pool;
+        std::cerr << "线程池创建失败！" << std::endl;
+        delete pool;
         exit(-1);
     }
 
@@ -82,6 +96,8 @@ int main(int argc,char *argv[]){
     int listenfd=socket(PF_INET,SOCK_STREAM,0);
     if(listenfd==-1){
         perror("创建套接字错误！");
+        delete[] users;
+        delete pool;
         exit(-1);
     }
 
@@ -98,6 +114,9 @@ int main(int argc,char *argv[]){
     int ret=bind(listenfd,(struct sockaddr*)&address,sizeof(address));
     if(ret==-1){
         perror("绑定错误！");
+        close(listenfd);
+        delete[] users;
+        delete pool;
         exit(-1);
     }
 
@@ -105,12 +124,22 @@ int main(int argc,char *argv[]){
     ret=listen(listenfd,5);
     if(ret==-1){
         perror("监听错误");
+        close(listenfd);
+        delete[] users;
+        delete pool;
         exit(-1);
     }
 
     //创建epoll实例 事件数组
     epoll_event events[MAX_EVENT_NUM];
-    int epollfd=epoll_create1(1);
+    int epollfd=epoll_create(1);
+    if(epollfd == -1){
+        perror("创建epoll实例失败");
+        close(listenfd);
+        delete[] users;
+        delete pool;
+        exit(-1);
+    }
 
     //将用于监听的文件描述符添加到epoll实例中
     //注意添加操作封装成了一个addfd()函数
@@ -118,6 +147,9 @@ int main(int argc,char *argv[]){
 
     //设置用于事件注册的静态成员m_epollfd
     HttpConnection::m_epollfd=epollfd;
+
+    std::cout << "服务器启动成功！监听端口: " << port << std::endl;
+    std::cout << "等待客户端连接..." << std::endl;
 
     while(1){
         int num=epoll_wait(epollfd,events,MAX_EVENT_NUM,-1);
@@ -135,21 +167,37 @@ int main(int argc,char *argv[]){
                 socklen_t clientAddressLen=sizeof(clientAddress);
 
                 int connectfd=accept(listenfd,(struct sockaddr*)&clientAddress,&clientAddressLen);
+                if(connectfd == -1){
+                    perror("接受连接失败");
+                    continue;
+                }
 
                 if(HttpConnection::m_user_count>=MAX_FD){
                     //目前的连接数已满
-
-                    //给服务器写一个信息（服务器正在忙）
-
+                    std::cout << "连接数已满，拒绝新连接" << std::endl;
+                    
+                    //给客户端发送服务器繁忙信息
+                    const char* busy_msg = "HTTP/1.1 503 Service Unavailable\r\n"
+                                          "Content-Type: text/plain\r\n"
+                                          "Connection: close\r\n"
+                                          "\r\n"
+                                          "服务器繁忙，请稍后再试";
+                    send(connectfd, busy_msg, strlen(busy_msg), 0);
+                    
                     close(connectfd);
                     continue;
                 }
 
                 //将新的客户端数据放到数组中
                 users[connectfd].init(connectfd,clientAddress);
+                
+                std::cout << "新客户端连接: " << inet_ntoa(clientAddress.sin_addr) 
+                          << ":" << ntohs(clientAddress.sin_port) 
+                          << "，连接ID: " << connectfd << std::endl;
             }
             else if(events[i].events & (EPOLLRDHUP | EPOLLHUP |EPOLLERR)){
                 //对方异常断开或错误
+                std::cout << "客户端异常断开，连接ID: " << sockfd << std::endl;
                 users[sockfd].closeConnection();//关闭连接
             }
             else if(events[i].events & EPOLLIN){
@@ -160,12 +208,14 @@ int main(int argc,char *argv[]){
                 }
                 else{
                     //读取失败
+                    std::cout << "读取数据失败，关闭连接ID: " << sockfd << std::endl;
                     users[sockfd].closeConnection();//关闭连接
                 }
             }
             else if(events[i].events & EPOLLOUT){
                 if(!users[sockfd].write()){
                     //写(一次性)失败
+                    std::cout << "写入数据失败，关闭连接ID: " << sockfd << std::endl;
                     users[sockfd].closeConnection();//关闭连接
                 }
             }
@@ -173,9 +223,13 @@ int main(int argc,char *argv[]){
 
     }
 
+    // 清理资源
+    std::cout << "服务器正在关闭..." << std::endl;
     close(epollfd);
     close(listenfd);
-    delete []pool;
     delete []users;
+    delete pool;
+    
+    std::cout << "服务器已关闭" << std::endl;
     return 0;
 }

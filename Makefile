@@ -1,21 +1,23 @@
+# Makefile
 CXX = g++
-CXXFLAGS = -std=c++11 -Wall -I.
-LDFLAGS = -lpthread
+CXXFLAGS = -Wall -g -std=c++11
+LIBS = -lmysqlclient -lpthread
+INCLUDES = -I./DataBaseModule -I./Thread
 
-SRCS = Task/http_connection.cpp main.cpp
+SRCS = main.cpp Task/http_connection.cpp DataBaseModule/mysql_connection.cpp
 OBJS = $(SRCS:.cpp=.o)
 TARGET = server
 
-.PHONY: all clean
-
-all: $(TARGET)
-
+# 注意：LIBS 必须在链接命令的最后
 $(TARGET): $(OBJS)
-	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) -o $(TARGET) $(OBJS) $(LIBS)
 
-# 模式规则编译 .cpp 文件
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
 clean:
 	rm -f $(OBJS) $(TARGET)
+	rm -f Task/*.o
+	rm -f DataBaseModule/*.o
+
+.PHONY: clean

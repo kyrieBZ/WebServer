@@ -17,11 +17,6 @@ public:
             throw std::exception();
         }
 
-        // 初始化信号量
-        if(sem_init(&m_queue_start, 0, 0) != 0) {
-            throw std::exception();
-        }
-
         m_thread_num = threadNum;
         m_max_request = maxRequest;
         m_stop = false;
@@ -33,7 +28,7 @@ public:
 
         // 创建thread_num个线程并设置线程脱离
         for(int i = 0; i < m_thread_num; ++i) {
-            printf("create the %dth thread\n", i);
+            printf("create the %dth thread\n", i+1);
 
             if(pthread_create(m_threads + i, NULL, worker, this) != 0) {
                 delete [] m_threads;
@@ -63,7 +58,7 @@ public:
 
         m_work_queue.push_back(request);
         m_queue_locker.unlock();
-        sem_post(&m_queue_start);
+        m_queue_start.post();
         return true;
     }
 
@@ -78,7 +73,7 @@ private:
     // 线程池运行函数
     void run() {
         while(!m_stop) {
-            sem_wait(&m_queue_start);  
+            m_queue_start.wait(); 
             m_queue_locker.lock();
             
             if(m_work_queue.empty()) {
@@ -93,7 +88,7 @@ private:
             if(!request) {
                 continue;
             }
-
+            //处理请求
             request->process();
         }
     }
@@ -104,7 +99,7 @@ private:
     int m_max_request;           // 请求队列最大容量
     std::list<T*> m_work_queue;  // 请求队列
     Locker m_queue_locker;       // 互斥锁
-    sem_t m_queue_start;         // 信号量
+    Semaphore m_queue_start;         // 信号量
     bool m_stop;                 // 是否结束线程
 };
 
